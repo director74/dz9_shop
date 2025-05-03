@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -10,17 +11,24 @@ import (
 	"github.com/director74/dz9_shop/order-service/internal/entity"
 	"github.com/director74/dz9_shop/order-service/internal/usecase"
 	"github.com/director74/dz9_shop/pkg/auth"
+	"github.com/director74/dz9_shop/pkg/idempotency"
 )
 
 type OrderHandler struct {
 	orderUseCase   *usecase.OrderUseCase
 	authMiddleware *auth.AuthMiddleware
+	idempService   idempotency.Service
 }
 
-func NewOrderHandler(orderUseCase *usecase.OrderUseCase, authMiddleware *auth.AuthMiddleware) *OrderHandler {
+func NewOrderHandler(
+	orderUseCase *usecase.OrderUseCase,
+	authMiddleware *auth.AuthMiddleware,
+	idempService idempotency.Service,
+) *OrderHandler {
 	return &OrderHandler{
 		orderUseCase:   orderUseCase,
 		authMiddleware: authMiddleware,
+		idempService:   idempService,
 	}
 }
 
@@ -36,7 +44,12 @@ func (h *OrderHandler) RegisterRoutes(router *gin.Engine) {
 		authorized := api.Group("")
 		authorized.Use(h.authMiddleware.AuthRequired())
 		{
-			authorized.POST("/orders", h.CreateOrder)
+			ordersGroup := authorized.Group("/orders")
+			ordersGroup.Use(idempotency.Middleware(h.idempService, "order", auth.GetUserID))
+			{
+				ordersGroup.POST("", h.CreateOrder)
+			}
+
 			authorized.GET("/orders/:id", h.GetOrder)
 			authorized.GET("/users/:id/orders", h.ListUserOrders)
 		}
@@ -77,6 +90,14 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	}
 	req.UserID = userID
 
+	continueExecution, _ := idempotency.ResponseHandler(c, func(ctx *gin.Context, resourceID uint) (interface{}, error) {
+		return h.orderUseCase.GetOrder(ctx.Request.Context(), resourceID)
+	})
+
+	if !continueExecution {
+		return
+	}
+
 	// Получаем JWT токен из контекста Gin
 	jwtToken, exists := c.Get("jwt_token")
 	if !exists {
@@ -91,6 +112,14 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Регистрируем созданный ресурс с requestID
+	idempCtx, exists := idempotency.GetRequestContext(c)
+	if exists && idempCtx.RequestID != "" {
+		if regErr := h.idempService.RegisterResourceID(ctx, idempCtx.RequestID, resp.ID); regErr != nil {
+			log.Printf("Ошибка при регистрации resourceID: %v", regErr)
+		}
 	}
 
 	c.JSON(http.StatusCreated, resp)

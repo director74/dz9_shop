@@ -1,0 +1,733 @@
+{
+	"info": {
+		"_postman_id": "b7e6a2c1-d3f4-5e6b-a7c8-9d0e1f2a3b4c",
+		"name": "Тесты идемпотентности заказов",
+		"description": "Коллекция для тестирования идемпотентности создания заказов с использованием заголовка X-Idempotency-Key",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "0"
+	},
+	"item": [
+		{
+			"name": "1. Подготовка окружения",
+			"item": [
+				{
+					"name": "Регистрация пользователя",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"// Генерация случайных email и пароля ПЕРЕД запросом",
+									"const randomSuffix = Math.random().toString(36).substring(2, 10);",
+									"const userEmail = `testuser_${randomSuffix}@example.com`;",
+									"const userPassword = `password_${randomSuffix}`;",
+									"",
+									"pm.collectionVariables.set(\"userEmail\", userEmail);",
+									"pm.collectionVariables.set(\"userPassword\", userPassword);",
+									"",
+									"console.log(`Подготовка к регистрации пользователя: ${userEmail}`)"
+								],
+								"type": "text/javascript"
+							}
+						},
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 201\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"console.log(`Запрос на регистрацию для ${pm.collectionVariables.get(\"userEmail\")} отправлен.`)"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"username\": \"{{userEmail}}\",\"email\": \"{{userEmail}}\",\"password\": \"{{userPassword}}\",\"first_name\": \"Тестовый\", \"last_name\": \"Пользователь\"}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/auth/register",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"auth",
+								"register"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Авторизация пользователя",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"pm.test(\"Получен токен и ID пользователя\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    console.log(\"Auth Response Body:\", JSON.stringify(jsonData));",
+									"    pm.expect(jsonData.token).to.be.a('string');",
+									"    pm.expect(jsonData.id).to.exist;",
+									"    pm.expect(jsonData.id).to.be.a('number');",
+									"    ",
+									"    pm.collectionVariables.set(\"authToken\", jsonData.token);",
+									"    pm.collectionVariables.set(\"userId\", jsonData.id);",
+									"    console.log(`Авторизован пользователь ID: ${jsonData.id}`);",
+									"    ",
+									"    // Генерируем уникальный идентификатор запроса для тестов идемпотентности",
+									"    const requestId = \"test-\" + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);",
+									"    pm.collectionVariables.set(\"idempotencyKey\", requestId);",
+									"    console.log(`Сгенерирован идентификатор запроса: ${requestId}`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"username\": \"{{userEmail}}\",\"password\": \"{{userPassword}}\"}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/auth/login",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"auth",
+								"login"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Пополнение баланса",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"const token = pm.collectionVariables.get(\"authToken\");",
+									"if (!token) {",
+									"    console.error(\"ОШИБКА: Токен авторизации (authToken) не найден в переменных коллекции!\");",
+									"    throw new Error(\"Необходимо успешно выполнить авторизацию перед пополнением баланса.\");",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						},
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"console.log(\"Баланс пополнен на 1000.0 для тестирования идемпотентности.\");"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"amount\": 1000.00}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrlBilling}}/api/v1/billing/deposit",
+							"host": [
+								"{{baseUrlBilling}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"billing",
+								"deposit"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "2. Тесты идемпотентности",
+			"item": [
+				{
+					"name": "Создание заказа (первый запрос)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 201 (Created)\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"pm.test(\"Заказ создан и имеет ID\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.id).to.exist;",
+									"    pm.expect(jsonData.id).to.be.a('number');",
+									"    ",
+									"    // Сохраняем ID созданного заказа для дальнейших тестов",
+									"    pm.collectionVariables.set(\"orderId\", jsonData.id);",
+									"    console.log(`Создан заказ с ID: ${jsonData.id}`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "X-Idempotency-Key",
+								"value": "{{idempotencyKey}}",
+								"description": "Идентификатор запроса для обеспечения идемпотентности"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"items\": [\n        {\n            \"product_id\": 1,\n            \"quantity\": 1,\n            \"price\": 100.0,\n            \"name\": \"Тестовый товар\"\n        }\n    ],\n    \"delivery\": {\n        \"address\": \"123 Main St\",\n        \"time_slot_id\": \"1\",\n        \"zone_id\": \"1\"\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/orders",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders"
+							]
+						},
+						"description": "Первый запрос на создание заказа с идентификатором идемпотентности"
+					},
+					"response": []
+				},
+				{
+					"name": "Создание заказа (повторный запрос)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 200 (OK)\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Повторный запрос вернул существующий заказ\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    ",
+									"    // Проверяем структуру ответа для повторного запроса",
+									"    pm.expect(jsonData.resource).to.exist;",
+									"    pm.expect(jsonData.message).to.exist;",
+									"    pm.expect(jsonData.message).to.include('ресурс уже был создан ранее');",
+									"    ",
+									"    // Проверяем, что ID заказа совпадает с ранее созданным",
+									"    var previousOrderId = pm.collectionVariables.get(\"orderId\");",
+									"    pm.expect(jsonData.resource.id).to.equal(Number(previousOrderId));",
+									"    ",
+									"    console.log(`Повторный запрос вернул существующий заказ ID: ${jsonData.resource.id}`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "X-Idempotency-Key",
+								"value": "{{idempotencyKey}}",
+								"description": "Тот же идентификатор запроса, что и в первом запросе"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"items\": [\n        {\n            \"product_id\": 1,\n            \"quantity\": 1,\n            \"price\": 100.0,\n            \"name\": \"Тестовый товар\"\n        }\n    ],\n    \"delivery\": {\n        \"address\": \"123 Main St\",\n        \"time_slot_id\": \"1\",\n        \"zone_id\": \"1\"\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/orders",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders"
+							]
+						},
+						"description": "Повторный запрос на создание заказа с тем же идентификатором идемпотентности"
+					},
+					"response": []
+				},
+				{
+					"name": "Создание заказа (новый идемпотентный ключ)",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"// Генерируем новый идентификатор запроса для создания нового заказа",
+									"const newRequestId = \"test-\" + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);",
+									"pm.collectionVariables.set(\"newIdempotencyKey\", newRequestId);",
+									"console.log(`Сгенерирован новый идентификатор запроса: ${newRequestId}`);"
+								],
+								"type": "text/javascript"
+							}
+						},
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 201 (Created)\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"pm.test(\"Создан новый заказ с другим ID\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.id).to.exist;",
+									"    pm.expect(jsonData.id).to.be.a('number');",
+									"    ",
+									"    // Проверяем, что ID нового заказа отличается от ранее созданного",
+									"    var previousOrderId = pm.collectionVariables.get(\"orderId\");",
+									"    pm.expect(jsonData.id).to.not.equal(Number(previousOrderId));",
+									"    ",
+									"    // Сохраняем ID нового заказа",
+									"    pm.collectionVariables.set(\"secondOrderId\", jsonData.id);",
+									"    console.log(`Создан новый заказ с ID: ${jsonData.id} (предыдущий ID: ${previousOrderId})`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "X-Idempotency-Key",
+								"value": "{{newIdempotencyKey}}",
+								"description": "Новый идентификатор запроса для создания нового заказа"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"items\": [\n        {\n            \"product_id\": 1,\n            \"quantity\": 1,\n            \"price\": 100.0,\n            \"name\": \"Тестовый товар\"\n        }\n    ],\n    \"delivery\": {\n        \"address\": \"123 Main St\",\n        \"time_slot_id\": \"1\",\n        \"zone_id\": \"1\"\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/orders",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders"
+							]
+						},
+						"description": "Создание второго заказа с новым идентификатором идемпотентности"
+					},
+					"response": []
+				},
+				{
+					"name": "Запрос без идентификатора (ошибка)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 400 (Bad Request)\", function () {",
+									"    pm.response.to.have.status(400);",
+									"});",
+									"",
+									"pm.test(\"Ответ содержит сообщение об ошибке\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.error).to.exist;",
+									"    pm.expect(jsonData.error).to.include('X-Idempotency-Key');",
+									"    console.log(`Получена ожидаемая ошибка: ${jsonData.error}`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"items\": [\n        {\n            \"product_id\": 1,\n            \"quantity\": 1,\n            \"price\": 100.0,\n            \"name\": \"Тестовый товар\"\n        }\n    ],\n    \"delivery\": {\n        \"address\": \"123 Main St\",\n        \"time_slot_id\": \"1\",\n        \"zone_id\": \"1\"\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/orders",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders"
+							]
+						},
+						"description": "Попытка создать заказ без идентификатора идемпотентности"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "3. Проверка созданных заказов",
+			"item": [
+				{
+					"name": "Получить заказ по ID (первый заказ)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Данные заказа соответствуют ожидаемым\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    var orderId = pm.collectionVariables.get(\"orderId\");",
+									"    ",
+									"    pm.expect(jsonData.id).to.equal(Number(orderId));",
+									"    console.log(`Получен заказ: ID=${jsonData.id}, Статус=${jsonData.status}`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/orders/{{orderId}}",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders",
+								"{{orderId}}"
+							]
+						},
+						"description": "Получение информации о первом созданном заказе"
+					},
+					"response": []
+				},
+				{
+					"name": "Получить заказ по ID (второй заказ)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Данные заказа соответствуют ожидаемым\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    var secondOrderId = pm.collectionVariables.get(\"secondOrderId\");",
+									"    ",
+									"    pm.expect(jsonData.id).to.equal(Number(secondOrderId));",
+									"    console.log(`Получен второй заказ: ID=${jsonData.id}, Статус=${jsonData.status}`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/orders/{{secondOrderId}}",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders",
+								"{{secondOrderId}}"
+							]
+						},
+						"description": "Получение информации о втором созданном заказе"
+					},
+					"response": []
+				},
+				{
+					"name": "Список заказов пользователя",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Код ответа 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"В списке есть оба созданных заказа\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    var orderId = Number(pm.collectionVariables.get(\"orderId\"));",
+									"    var secondOrderId = Number(pm.collectionVariables.get(\"secondOrderId\"));",
+									"    ",
+									"    pm.expect(jsonData.orders).to.be.an('array');",
+									"    ",
+									"    // Проверяем наличие обоих заказов",
+									"    var orderIds = jsonData.orders.map(order => order.id);",
+									"    pm.expect(orderIds).to.include(orderId);",
+									"    pm.expect(orderIds).to.include(secondOrderId);",
+									"    ",
+									"    console.log(`Получен список заказов пользователя: ${jsonData.orders.length} заказов`);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{authToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrlOrder}}/api/v1/users/{{userId}}/orders",
+							"host": [
+								"{{baseUrlOrder}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"users",
+								"{{userId}}",
+								"orders"
+							]
+						},
+						"description": "Получение списка всех заказов пользователя"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrlOrder",
+			"value": "http://localhost:8080",
+			"type": "string",
+			"description": "Базовый URL сервиса заказов"
+		},
+		{
+			"key": "baseUrlBilling",
+			"value": "http://localhost:8081",
+			"type": "string",
+			"description": "Базовый URL сервиса биллинга"
+		},
+		{
+			"key": "userEmail",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "userPassword",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "authToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "userId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "idempotencyKey",
+			"value": "",
+			"type": "string",
+			"description": "Идентификатор запроса для идемпотентности"
+		},
+		{
+			"key": "orderId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "newIdempotencyKey",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "secondOrderId",
+			"value": "",
+			"type": "string"
+		}
+	]
+} 

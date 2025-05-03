@@ -22,9 +22,13 @@ import (
 	"github.com/director74/dz9_shop/pkg/auth"
 	"github.com/director74/dz9_shop/pkg/database"
 	"github.com/director74/dz9_shop/pkg/errors"
+	"github.com/director74/dz9_shop/pkg/idempotency"
 	"github.com/director74/dz9_shop/pkg/messaging"
 	"github.com/director74/dz9_shop/pkg/rabbitmq"
 )
+
+// Время жизни записи о идентификаторах запросов (по умолчанию 24 часа)
+const requestIDTTL = 24 * time.Hour
 
 // App представляет приложение
 type App struct {
@@ -46,8 +50,8 @@ func NewApp(config *config.Config) (*App, error) {
 		return nil, errors.AppendPrefix(err, "не удалось подключиться к базе данных")
 	}
 
-	// Автомиграция моделей, включая SagaState
-	if err := database.AutoMigrateWithCleanup(db, &entity.User{}, &entity.Order{}, &entity.OrderItem{}, &entity.SagaState{}); err != nil {
+	// Автомиграция моделей, включая SagaState и RequestID
+	if err := database.AutoMigrateWithCleanup(db, &entity.User{}, &entity.Order{}, &entity.OrderItem{}, &entity.SagaState{}, &idempotency.RequestID{}); err != nil {
 		return nil, errors.AppendPrefix(err, "не удалось выполнить миграцию")
 	}
 
@@ -91,7 +95,11 @@ func NewApp(config *config.Config) (*App, error) {
 	// Создаем middleware для аутентификации
 	authMiddleware := auth.NewAuthMiddleware(jwtManager)
 
-	// Создаем use cases, передавая sagaStateRepo в OrderUseCase
+	// Создаем репозиторий и сервис идемпотентности из пакета pkg
+	idempRepo := idempotency.NewGormRepository(db)
+	idempService := idempotency.NewService(idempRepo, requestIDTTL)
+
+	// Создаем use cases
 	authUseCase := usecase.NewAuthUseCase(userRepo, jwtManager, billingClient)
 	orderUseCase := usecase.NewOrderUseCase(orderRepo, userRepo, sagaStateRepo, billingClient, rmq, "order_events", "saga_exchange")
 
@@ -104,7 +112,7 @@ func NewApp(config *config.Config) (*App, error) {
 
 	// Создаем HTTP контроллеры
 	authHandler := httpController.NewAuthHandler(authUseCase)
-	orderHandler := httpController.NewOrderHandler(orderUseCase, authMiddleware)
+	orderHandler := httpController.NewOrderHandler(orderUseCase, authMiddleware, idempService)
 
 	// Инициализируем Gin роутер
 	router := gin.Default()
@@ -149,6 +157,23 @@ func (a *App) Run() error {
 		log.Printf("HTTP сервер запущен на порту %s", a.config.HTTP.Port)
 		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Ошибка запуска HTTP сервера: %v", err)
+		}
+	}()
+
+	// Очистка устаревших записей об идентификаторах запросов
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := idempotency.NewGormRepository(a.db).DeleteExpired(context.Background()); err != nil {
+					log.Printf("Ошибка при удалении устаревших идентификаторов запросов: %v", err)
+				}
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
